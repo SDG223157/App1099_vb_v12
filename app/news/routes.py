@@ -193,6 +193,9 @@ def search():
                 query = query.filter(NewsArticle.symbols.any(or_(*symbol_conditions)))
             else:
                 query = query.filter(NewsArticle.symbols.any(ArticleSymbol.symbol == symbol_upper))
+            
+            # Add default ordering by published_at desc for non-special keywords
+            query = query.order_by(NewsArticle.published_at.desc())
 
         # Paginate the results - 1 item per page
         pagination = query.paginate(page=page, per_page=1, error_out=False)
