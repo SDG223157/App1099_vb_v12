@@ -161,6 +161,25 @@ def search():
                 query = query.filter(NewsArticle.ai_sentiment_rating.isnot(None))
                 query = query.order_by(NewsArticle.ai_sentiment_rating.asc())
         else:
+             # Convert Yahoo Finance symbols to TradingView format
+
+            if re.match(r'^\d{4}\.HK$', symbol_upper):
+
+                # Convert HK stocks (e.g., 0700.HK -> HKEX:700)
+
+                symbol_upper = f"HKEX:{int(symbol_upper.replace('.HK', '').replace('.hk', '')):d}"
+
+            elif re.search(r'\.SS$', symbol_upper):
+
+                # Convert Shanghai stocks (e.g., 600519.SS -> SSE:600519)
+
+                symbol_upper = f"SSE:{symbol_upper.replace('.SS', '')}"
+
+            elif re.search(r'\.SZ$', symbol_upper):
+
+                # Convert Shenzhen stocks (e.g., 000001.SZ -> SZSE:000001)
+
+                symbol_upper = f"SZSE:{symbol_upper.replace('.SZ', '')}"
             # Check if it's a futures commodity
             if symbol_upper in FUTURES_MAPPING:
                 futures_symbols = FUTURES_MAPPING[symbol_upper]
@@ -281,11 +300,31 @@ def fetch_news():
 @bp.route('/api/batch-fetch', methods=['POST'])
 @login_required
 def batch_fetch():
+    """Batch fetch news articles"""
     try:
         data = request.get_json()
+        if not data:
+            return jsonify({'error': 'No data provided'}), HTTPStatus.BAD_REQUEST
+        
         chunk_size = 5  # Process 5 symbols at a time
         symbols = data.get('symbols', DEFAULT_SYMBOLS[:10]) 
         articles_per_symbol = min(int(data.get('limit', 2)), 5)
+        
+        # Delete articles with no content and no insights
+        try:
+            articles_to_delete = NewsArticle.query.filter(
+                NewsArticle.content.is_(None),
+                NewsArticle.ai_insights.is_(None)
+            ).all()
+            
+            for article in articles_to_delete:
+                db.session.delete(article)
+            
+            db.session.commit()
+            logger.info(f"Deleted {len(articles_to_delete)} articles with no content and insights")
+        except Exception as e:
+            logger.error(f"Error deleting empty articles: {str(e)}")
+            db.session.rollback()
         
         all_articles = []
         chunks = [symbols[i:i + chunk_size] for i in range(0, len(symbols), chunk_size)]
@@ -301,7 +340,7 @@ def batch_fetch():
                 except Exception as e:
                     logger.error(f"Error fetching {symbol}: {str(e)}")
                     continue
-                
+        
         return jsonify({
             'status': 'success',
             'articles': all_articles,
@@ -878,3 +917,150 @@ def admin_required(f):
             abort(403)  # HTTP 403 Forbidden
         return f(*args, **kwargs)
     return decorated_function
+
+@bp.route('/articles/manage')
+@admin_required
+def manage_articles():
+    """Show editable table of articles"""
+    try:
+        page = request.args.get('page', 1, type=int)
+        per_page = 20
+        search = request.args.get('search', '')
+
+        # Get paginated articles
+        query = NewsArticle.query
+        
+        if search:
+            search = f"%{search}%"
+            query = query.filter(NewsArticle.title.ilike(search))
+            
+        articles = query.order_by(NewsArticle.published_at.desc())\
+            .paginate(page=page, per_page=per_page, error_out=False)
+
+        return render_template(
+            'news/manage_articles.html',
+            articles=articles,
+            search=search
+        )
+
+    except Exception as e:
+        logger.error(f"Error managing articles: {str(e)}")
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+@bp.route('/articles/update/<int:article_id>', methods=['GET', 'POST'])
+@admin_required
+def update_article(article_id):
+    """Update article content"""
+    try:
+        article = NewsArticle.query.get_or_404(article_id)
+        
+        # Handle GET request to fetch article data
+        if request.method == 'GET':
+            return jsonify({
+                'title': article.title,
+                'content': article.content,
+                'ai_summary': article.ai_summary,
+                'ai_insights': article.ai_insights,
+                'ai_sentiment_rating': article.ai_sentiment_rating
+            })
+
+        # Handle POST request to update article
+        data = request.get_json()
+
+        # Update fields if provided
+        if 'title' in data:
+            article.title = data['title']
+        if 'content' in data:
+            article.content = data['content']
+        if 'ai_summary' in data:
+            article.ai_summary = data['ai_summary']
+        if 'ai_insights' in data:
+            article.ai_insights = data['ai_insights']
+        if 'ai_sentiment_rating' in data:
+            article.ai_sentiment_rating = float(data['ai_sentiment_rating'])
+
+        db.session.commit()
+        return jsonify({'status': 'success'})
+
+    except Exception as e:
+        db.session.rollback()
+        logger.error(f"Error updating article {article_id}: {str(e)}")
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+@bp.route('/articles/view/<int:article_id>')
+@admin_required
+def view_article(article_id):
+    """View article details"""
+    try:
+        article = NewsArticle.query.get_or_404(article_id)
+        return render_template(
+            'news/view_article.html',
+            article=article
+        )
+    except Exception as e:
+        logger.error(f"Error viewing article {article_id}: {str(e)}")
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+@bp.route('/articles/clear-content/<int:article_id>', methods=['POST'])
+@admin_required
+def clear_article_content(article_id):
+    """Clear only article content, keep AI fields"""
+    try:
+        article = NewsArticle.query.get_or_404(article_id)
+        article.content = None
+        db.session.commit()
+        return jsonify({'status': 'success'})
+    except Exception as e:
+        db.session.rollback()
+        logger.error(f"Error clearing article {article_id} content: {str(e)}")
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+@bp.route('/articles/clear-all-content', methods=['POST'])
+@admin_required
+def clear_all_content():
+    """Clear content from all articles but preserve AI fields"""
+    try:
+        # Get search parameter to maintain filter if exists
+        search = request.args.get('search', '')
+        query = NewsArticle.query
+
+        if search:
+            search = f"%{search}%"
+            query = query.filter(NewsArticle.title.ilike(search))
+
+        # Update all matching articles
+        articles = query.all()
+        count = 0
+        for article in articles:
+            if article.content is not None:
+                article.content = None
+                count += 1
+            if article.sentiment_label is not None:
+                article.sentiment_label = None
+                count += 1
+            if article.sentiment_score is not None:
+                article.sentiment_score = None
+                count += 1
+            if article.sentiment_explanation is not None:
+                article.sentiment_explanation = None
+                count += 1
+            if article.brief_summary is not None:
+                article.brief_summary = None
+                count += 1
+            if article.key_points is not None:
+                article.key_points = None
+                count += 1
+            if article.market_impact_summary is not None:
+                article.market_impact_summary = None
+                count += 1
+
+        db.session.commit()
+        return jsonify({
+            'status': 'success',
+            'message': f'Cleared content from {count} articles'
+        })
+
+    except Exception as e:
+        db.session.rollback()
+        logger.error(f"Error clearing all content: {str(e)}")
+        return jsonify({'status': 'error', 'message': str(e)}), 500
