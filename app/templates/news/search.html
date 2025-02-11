@@ -73,6 +73,13 @@
                           class="px-4 py-2 bg-gray-200 text-gray-700 rounded-md hover:bg-gray-300 transition-colors">
                            New Search
                        </a>
+                       {% if search_params.symbol %}
+                       <button type="button" 
+                               onclick="analyzeStock('{{ search_params.symbol }}')"
+                               class="px-4 py-2 bg-green-500 text-white rounded-md hover:bg-green-600 transition-colors">
+                           Analyze
+                       </button>
+                       {% endif %}
                    </div>
                </div>
                
@@ -224,6 +231,34 @@
            if (rating > 50) return 'bg-green-100 text-green-800';
            if (rating < -50) return 'bg-red-100 text-red-800';
            return 'bg-yellow-100 text-yellow-800';
+       }
+
+       function analyzeStock(symbol) {
+           // Create form data
+           const formData = new FormData();
+           formData.append('ticker', symbol);
+
+           // Submit POST request to analyze endpoint
+           fetch('/analyze', {
+               method: 'POST',
+               body: formData
+           })
+           .then(response => {
+               if (response.ok) {
+                   return response.text();
+               }
+               throw new Error('Network response was not ok');
+           })
+           .then(html => {
+               // Open the analysis in a new window/tab
+               const analysisWindow = window.open('', '_blank');
+               analysisWindow.document.write(html);
+               analysisWindow.document.close();
+           })
+           .catch(error => {
+               console.error('Error:', error);
+               alert('Failed to analyze stock: ' + error.message);
+           });
        }
    </script>
 </body>
