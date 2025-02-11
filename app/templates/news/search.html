@@ -234,9 +234,59 @@
        }
 
        function analyzeStock(symbol) {
-           // Create form data
+           // Convert input symbol to Yahoo Finance format
+           let yahooSymbol = symbol;
+           
+           // Remove any exchange prefixes like NASDAQ:, NYSE:, etc.
+           if (symbol.includes(':')) {
+               yahooSymbol = symbol.split(':')[1];
+           }
+           
+           // Handle special cases for indices
+           const indexMappings = {
+               'HSI': '^HSI',     // Hang Seng Index
+               'GSPC': '^GSPC',   // S&P 500
+               'DJI': '^DJI',     // Dow Jones Industrial Average
+               'IXIC': '^IXIC',   // NASDAQ Composite
+               'N225': '^N225',   // Nikkei 225
+               'FTSE': '^FTSE',   // FTSE 100
+               'VIX': '^VIX'      // Volatility Index
+           };
+
+           // Handle special cases for currencies
+           const currencyMappings = {
+               'EURUSD': 'EUR=X',
+               'GBPUSD': 'GBP=X',
+               'USDJPY': 'JPY=X',
+               'USDCNY': 'CNY=X',
+               'USDHKD': 'HKD=X',
+               // Add more currency pairs as needed
+           };
+
+           // Check if symbol is an index
+           if (indexMappings[yahooSymbol]) {
+               yahooSymbol = indexMappings[yahooSymbol];
+           }
+           // Check if symbol is a currency pair
+           else if (currencyMappings[yahooSymbol]) {
+               yahooSymbol = currencyMappings[yahooSymbol];
+           }
+           // Handle Hong Kong stocks
+           else if (/^\d{4}$/.test(yahooSymbol)) {
+               yahooSymbol = yahooSymbol + '.HK';
+           }
+           // Handle Shanghai stocks
+           else if (/^(60|68|51|56|58)\d{4}$/.test(yahooSymbol)) {
+               yahooSymbol = yahooSymbol + '.SS';
+           }
+           // Handle Shenzhen stocks
+           else if (/^(00|30)\d{4}$/.test(yahooSymbol)) {
+               yahooSymbol = yahooSymbol + '.SZ';
+           }
+
+           // Create form data with converted symbol
            const formData = new FormData();
-           formData.append('ticker', symbol);
+           formData.append('ticker', yahooSymbol);
 
            // Submit POST request to analyze endpoint
            fetch('/analyze', {
